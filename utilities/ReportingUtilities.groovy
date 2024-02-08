@@ -208,7 +208,7 @@ def calculateConcurrentChanges(Set<String> buildSet) {
 		// Run analysis for each remoteBranch, which matches the configured criteria
 		remoteBranches.each { gitReference ->
 	
-			if (matchesPattern(gitReference,gitRefMatcherPatterns) && !gitReference.equals(props.applicationCurrentBranch)){
+			if (matchesPattern(gitReference,gitRefMatcherPatterns) && !gitReference.equals(props.applicationConfiguration)){
 	
 				Set<String> concurrentChangedFiles = new HashSet<String>()
 				Set<String> concurrentRenamedFiles = new HashSet<String>()
