@@ -41,44 +41,44 @@ sortedList.each { buildFile ->
 
 	// create mvs commands
 	String member = CopyToPDS.createMemberName(buildFile)
+	String needsLinking = props.getFileProperty('rexx_linkEdit', buildFile)
+
 	File logFile = new File( props.userBuild ? "${props.buildOutDir}/${member}.log" : "${props.buildOutDir}/${member}.REXX.log")
 	if (logFile.exists())
 		logFile.delete()
-	MVSExec compile = createCompileCommand(buildFile, logicalFile, member, logFile)
 	File linkEditLogFile = new File( props.userBuild ? "${props.buildOutDir}/${member}.LinkEdit.log" : "${props.buildOutDir}/${member}.REXX.LinkEdit.log")
 	if (linkEditLogFile.exists())
 		linkEditLogFile.delete()
-	MVSExec linkEdit = createLinkEditCommand(buildFile, logicalFile, member, linkEditLogFile)
-
+	MVSExec compile = createCompileCommand(buildFile, logicalFile, member, logFile)
+	MVSExec linkEdit
+	if (needsLinking.toBoolean()) linkEdit = createLinkEditCommand(buildFile, logicalFile, member, linkEditLogFile)
 
 	// execute mvs commands in a mvs job
 	MVSJob job = new MVSJob()
 	job.start()
+	boolean clean = true
 
 	// compile the cobol program
 	int rc = compile.execute()
 	int maxRC = props.getFileProperty('rexx_compileMaxRC', buildFile).toInteger()
 
-	boolean bindFlag = true
-
+	
 	if (rc > maxRC) {
-		bindFlag = false
+		clean = false
 		String errorMsg = "*! The compile return code ($rc) for $buildFile exceeded the maximum return code allowed ($maxRC)"
 		println(errorMsg)
-		props.error = "true"
 		buildUtils.updateBuildResult(errorMsg:errorMsg,logs:["${member}.log":logFile])
 	}
 	else {
 		// if this program needs to be link edited . . .
-		String needsLinking = props.getFileProperty('rexx_linkEdit', buildFile)
-		if (needsLinking.toBoolean()) {
+		if (linkEdit) {
 			rc = linkEdit.execute()
 			maxRC = props.getFileProperty('rexx_linkEditMaxRC', buildFile).toInteger()
 
 			if (rc > maxRC) {
+				clean = false
 				String errorMsg = "*! The link edit return code ($rc) for $buildFile exceeded the maximum return code allowed ($maxRC)"
 				println(errorMsg)
-				props.error = "true"
 				buildUtils.updateBuildResult(errorMsg:errorMsg,logs:["${member}.log":logFile])
 			}
 			else {
@@ -94,6 +94,36 @@ sortedList.each { buildFile ->
 
 	// clean up passed DD statements
 	job.stop()
+
+	if (clean) { // success
+		if (props.createBuildMaps) {
+			// create build map for each build file upon success
+			BuildGroup group = MetadataStoreFactory.getMetadataStore().getBuildGroup(props.applicationBuildGroup)
+			if (group.buildMapExists(buildFile)) {
+				if (props.verbose) println("* Replacing existing build map for $buildFile")
+				group.deleteBuildMap(buildFile)
+			}
+
+			BuildMap buildMap = group.createBuildMap(buildFile) // build map creation
+			
+			// populate outputs with IExecutes
+			List<IExecute> execs = new ArrayList<IExecute>()
+			if (compile != null) execs.add(compile)
+			if (linkEdit != null) execs.add(linkEdit)
+			buildMap.populateOutputs(execs)
+			// populate inputs and sources using dependency resolution
+			buildMap.populateInputsFromGit(props.workspace, dependencySearch)
+			// populate binary inputs from load module scanning
+			if (linkEdit != null) {
+				String scanLoadModule = props.getFileProperty('rexx_scanLoadModule', buildFile)
+				if (scanLoadModule && scanLoadModule.toBoolean())
+					buildMap.populateBinaryInputsFromGit(props.rexx_loadPDS, member)
+			}
+		}
+	}
+	else { // failure
+		props.error = "true"
+	}
 }
 
 // end script

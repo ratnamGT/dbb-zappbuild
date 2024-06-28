@@ -1,4 +1,5 @@
 @groovy.transform.BaseScript com.ibm.dbb.groovy.ScriptLoader baseScript
+import com.ibm.dbb.EnvVars
 import com.ibm.dbb.metadata.*
 import com.ibm.dbb.dependency.*
 import com.ibm.dbb.build.*
@@ -76,13 +77,12 @@ sortedList.each { buildFile ->
 	int rc = compile.execute()
 	int maxRC = props.getFileProperty('cobol_compileMaxRC', buildFile).toInteger()
 
-	boolean bindFlag = true
+	boolean clean = true
 
 	if (rc > maxRC) {
-		bindFlag = false
+		clean = false
 		String errorMsg = "*! The compile return code ($rc) for $buildFile exceeded the maximum return code allowed ($maxRC)"
 		println(errorMsg)
-		props.error = "true"
 		buildUtils.updateBuildResult(errorMsg:errorMsg,logs:["${member}.log":logFile])
 	}
 	else { // if this program needs to be link edited . . .
@@ -94,15 +94,14 @@ sortedList.each { buildFile ->
 			BuildReportFactory.getBuildReport().addRecord(db2BindInfoRecord)
 		}
 		
-		if (needsLinking.toBoolean()) {
+		if (linkEdit) {
 			rc = linkEdit.execute()
 			maxRC = props.getFileProperty('cobol_linkEditMaxRC', buildFile).toInteger()
 
 			if (rc > maxRC) {
-				bindFlag = false
+				clean = false
 				String errorMsg = "*! The link edit return code ($rc) for $buildFile exceeded the maximum return code allowed ($maxRC)"
 				println(errorMsg)
-				props.error = "true"
 				buildUtils.updateBuildResult(errorMsg:errorMsg,logs:["${member}.log":logFile])
 			}
 			else {
@@ -117,24 +116,53 @@ sortedList.each { buildFile ->
 	}
 
 	//perform Db2 Bind only on User Build and perfromBindPackage property
-	if (props.userBuild && bindFlag && logicalFile.isSQL() && props.bind_performBindPackage && props.bind_performBindPackage.toBoolean() ) {
+	if (props.userBuild && clean && logicalFile.isSQL() && props.bind_performBindPackage && props.bind_performBindPackage.toBoolean() ) {
 		int bindMaxRC = props.getFileProperty('bind_maxRC', buildFile).toInteger()
 
 		// if no  owner is set, use the user.name as package owner
-		def owner = ( !props.bind_packageOwner ) ? System.getProperty("user.name") : props.bind_packageOwner
+		def owner = ( !props.bind_packageOwner ) ? EnvVars.getUserName() : props.bind_packageOwner
 
 		def (bindRc, bindLogFile) = bindUtils.bindPackage(buildFile, props.cobol_dbrmPDS, props.buildOutDir, props.bind_runIspfConfDir,
 				props.bind_db2Location, props.bind_collectionID, owner, props.bind_qualifier, props.verbose && props.verbose.toBoolean());
 		if ( bindRc > bindMaxRC) {
+			clean = false
 			String errorMsg = "*! The bind package return code ($bindRc) for $buildFile exceeded the maximum return code allowed ($props.bind_maxRC)"
 			println(errorMsg)
-			props.error = "true"
 			buildUtils.updateBuildResult(errorMsg:errorMsg,logs:["${member}_bind.log":bindLogFile])
 		}
 	}
 
 	// clean up passed DD statements
 	job.stop()
+
+	if (clean) { // success
+		if (props.createBuildMaps && !isZUnitTestCase) {
+			// create build map for each build file upon success
+			BuildGroup group = MetadataStoreFactory.getMetadataStore().getBuildGroup(props.applicationBuildGroup)
+			if (group.buildMapExists(buildFile)) {
+				if (props.verbose) println("* Replacing existing build map for $buildFile")
+				group.deleteBuildMap(buildFile)
+			}
+
+			BuildMap buildMap = group.createBuildMap(buildFile) // build map creation
+			// populate outputs with IExecutes
+			List<IExecute> execs = new ArrayList<IExecute>()
+			if (compile) execs.add(compile)
+			if (linkEdit) execs.add(linkEdit)
+			buildMap.populateOutputs(execs)
+			// populate inputs using dependency resolution
+			buildMap.populateInputsFromGit(props.workspace, dependencySearch)
+			// populate binary inputs from load module scanning
+			if (linkEdit) { 
+				String scanLoadModule = props.getFileProperty('cobol_scanLoadModule', buildFile)
+				if (scanLoadModule && scanLoadModule.toBoolean())
+					buildMap.populateBinaryInputsFromGit(props.cobol_loadPDS, member)
+			}
+		}
+	}
+	else { // error
+		props.error = "true"
+	}
 }
 
 // end script

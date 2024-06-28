@@ -13,6 +13,7 @@ println("** Building ${argMap.buildList.size()} ${argMap.buildList.size() == 1 ?
 
 // verify required build properties
 buildUtils.assertBuildProperties(props.bms_requiredBuildProperties)
+if (props.createBuildMaps) assert props.bmsSearch : "*! Missing required build property for build map creation 'bmsSearch'" // verify required prop for build map generation
 
 def langQualifier = "bms"
 buildUtils.createLanguageDatasets(langQualifier)
@@ -38,18 +39,38 @@ sortedList.each { buildFile ->
 	
 	// execute mvs commands in a mvs job
 	def maxRC = props.getFileProperty('bms_maxRC', buildFile).toInteger()
-        def rc = new MVSJob().executable(copyGen)
-	                     .executable(compile)
-			     .executable(linkEdit)
-			     .maxRC(maxRC)
-			     .execute()
-	
-    if (rc > maxRC) {
+	MVSJob mvsJob = new MVSJob().executable(copyGen)
+								.executable(compile)
+								.executable(linkEdit)
+								.maxRC(maxRC)
+    
+	int rc = mvsJob.execute()
+    
+	if (rc > maxRC) {
 	    String errorMsg = "*! The build return code ($rc) for $buildFile exceeded the maximum return code allowed ($maxRC)"
 		println(errorMsg)
 		props.error = "true"
 		buildUtils.updateBuildResult(errorMsg:errorMsg,logs:["${member}.log":logFile])
-	 }
+	}
+	else { // success
+		if (props.createBuildMaps) {
+			// create build map for each build file upon success
+			BuildGroup group = MetadataStoreFactory.getMetadataStore().getBuildGroup(props.applicationBuildGroup)
+			if (group.buildMapExists(buildFile)) {
+				if (props.verbose) println("* Replacing existing build map for $buildFile")
+				group.deleteBuildMap(buildFile)
+			}
+
+			BuildMap buildMap = group.createBuildMap(buildFile) // build map creation
+			// populate outputs with IExecutes
+			buildMap.populateOutputs(mvsJob.getExecutables())
+			// populate sources and inputs with git metadata
+			buildMap.populateInputsFromGit(props.workspace, props.bmsSearch)
+			// populate binary inputs from load module
+			buildMap.populateBinaryInputsFromGit(props.bms_loadPDS, member)
+		}
+	}
+
 	
 }
 

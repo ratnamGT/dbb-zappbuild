@@ -7,7 +7,6 @@ import java.util.regex.Matcher
 import java.util.regex.Pattern
 
 @Field BuildProperties props = BuildProperties.getInstance()
-@Field MetadataStore metadataStore
 
 /*
  * Tests if directory is in a local git repository
@@ -414,22 +413,15 @@ def getChangedProperties(String gitDir, String baseline, String currentHash, Str
 
 /** helper methods **/
 
-def getMetadataStore() {
-	if (!metadataStore)
-		metadataStore = MetadataStoreFactory.getMetadataStore()
-	return metadataStore
-}
-
 /*
  * updateBuildResult - for git cmd related issues
  */
 def updateBuildResult(Map args) {
 	// args : errorMsg / warningMsg
-	MetadataStore metadataStore = MetadataStoreFactory.getMetadataStore()
 
 	// update build results only in non-userbuild scenarios
-	if (metadataStore && !props.userBuild) {
-		def buildResult = metadataStore.getBuildResult(props.applicationBuildGroup, props.applicationBuildLabel)
+	if (MetadataStoreFactory.metadataStoreExists() && !props.userBuild) {
+		BuildResult buildResult = MetadataStoreFactory.getMetadataStore().getBuildGroup(props.applicationBuildGroup).getBuildResult(props.applicationBuildLabel)
 		if (!buildResult) {
 			println "*! No build result found for BuildGroup '${props.applicationBuildGroup}' and BuildLabel '${props.applicationBuildLabel}'"
 			return

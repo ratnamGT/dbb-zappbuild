@@ -136,7 +136,7 @@ def createImpactBuildList() {
 
 					// create logical dependency and query collections for logical files with this dependency
 					LogicalDependency lDependency = new LogicalDependency("$changedProp","BUILDPROPERTIES","PROPERTY")
-					logicalFileList = metadataStore.getCollection(props.applicationCollectionName).getLogicalFiles(lDependency)
+					logicalFileList = metadataStore.getBuildGroup(props.applicationBuildGroup).getCollection("sources").getLogicalFiles(lDependency)
 
 
 					// get excludeListe
@@ -217,13 +217,13 @@ def createMergeBuildList(){
 def findImpactedFiles(String impactSearch, String changedFile) {
 	
 	List<String> collections = new ArrayList<String>()
-	collections.add(props.applicationCollectionName)
-	collections.add(props.applicationOutputsCollectionName)
+	collections.add("sources")
+	collections.add("outputs")
 	
 	if (props.verbose)
 		println ("*** Creating SearchPathImpactFinder with collections " + collections + " and impactSearch configuration " + impactSearch)
 	
-	def finder = new SearchPathImpactFinder(impactSearch, collections)
+	def finder = new SearchPathImpactFinder(impactSearch, props.applicationBuildGroup, collections)
 	
 	// Find all files impacted by the changed file
 	impacts = finder.findImpactedFiles(changedFile, props.workspace)
@@ -503,27 +503,26 @@ def scanOnlyStaticDependencies(List buildList){
 
 
 def updateCollection(changedFiles, deletedFiles, renamedFiles) {
-
 	if (!MetadataStoreFactory.metadataStoreExists()) {
 		if (props.verbose) println "** Unable to update collections. No Metadata Store."
 		return
-	}
-	MetadataStore metadataStore = MetadataStoreFactory.getMetadataStore()
+	} 
+	BuildGroup buildGroup = MetadataStoreFactory.getMetadataStore().getBuildGroup(props.applicationBuildGroup)
+	Collection sourcesCollection = buildGroup.getCollection("sources")
+	Collection outputsCollection = buildGroup.getCollection("outputs")
 
-	if (props.verbose) println "** Updating collections ${props.applicationCollectionName} and ${props.applicationOutputsCollectionName}"
+	if (props.verbose) println "** Updating sources and outputs collections"
 	//def scanner = new DependencyScanner()
 	List<LogicalFile> logicalFiles = new ArrayList<LogicalFile>()
 	List<PathMatcher> excludeMatchers = buildUtils.createPathMatcherPattern(props.excludeFileList)
-
-	verifyCollections()
 
 	// remove deleted files from collection
 	deletedFiles.each { file ->
 		// files in a collection are stored as relative paths from a source directory
 		if (props.verbose) println "*** Deleting logical file for $file"
 		logicalFile = buildUtils.relativizePath(file)
-		metadataStore.getCollection(props.applicationCollectionName).deleteLogicalFile(logicalFile)
-		metadataStore.getCollection(props.applicationOutputsCollectionName).deleteLogicalFile(logicalFile)
+		sourcesCollection.deleteLogicalFile(logicalFile)
+		outputsCollection.deleteLogicalFile(logicalFile)
 	}
 
 	// remove renamed files from collection
@@ -531,8 +530,8 @@ def updateCollection(changedFiles, deletedFiles, renamedFiles) {
 		// files in a collection are stored as relative paths from a source directory
 		if (props.verbose) println "*** Deleting renamed logical file for $file"
 		logicalFile = buildUtils.relativizePath(file)
-		metadataStore.getCollection(props.applicationCollectionName).deleteLogicalFile(logicalFile)
-		metadataStore.getCollection(props.applicationOutputsCollectionName).deleteLogicalFile(logicalFile)
+		sourcesCollection.deleteLogicalFile(logicalFile)
+		outputsCollection.deleteLogicalFile(logicalFile)
 	}
 
 	if (props.createTestcaseDependency && props.createTestcaseDependency.toBoolean() && changedFiles && changedFiles.size() > 1) {
@@ -585,7 +584,7 @@ def updateCollection(changedFiles, deletedFiles, renamedFiles) {
 							// find in local list of logical files first (batch processing)
 							def testCaseFiles = logicalFiles.findAll{it.getLname().equals(sysTestDependency.getLname())}
 							if (!testCaseFiles){ // alternate retrieve it from the collection
-								testCaseFiles = metadataStore.getCollection(props.applicationCollectionName).getLogicalFiles(sysTestDependency.getLname()).find{
+								testCaseFiles = sourcesCollection.getLogicalFiles(sysTestDependency.getLname()).find{
 									it.getLanguage().equals("COB")
 								}
 							}
@@ -614,11 +613,12 @@ def updateCollection(changedFiles, deletedFiles, renamedFiles) {
 				}
 			}
 
+
 			// save logical files in batches of 500 to avoid running out of heap space
 			if (logicalFiles.size() == 500) {
 				if (props.verbose)
-					println "** Storing ${logicalFiles.size()} logical files in MetadataStore collection '$props.applicationCollectionName'"
-				metadataStore.getCollection(props.applicationCollectionName).addLogicalFiles(logicalFiles)
+					println "** Storing ${logicalFiles.size()} logical files in MetadataStore collection '${sourcesCollection.getName()}'"
+				sourcesCollection.addLogicalFiles(logicalFiles)
 				logicalFiles.clear()
 			}
 		}
@@ -626,8 +626,8 @@ def updateCollection(changedFiles, deletedFiles, renamedFiles) {
 
 	// save logical files
 	if (props.verbose)
-		println "** Storing ${logicalFiles.size()} logical files in MetadataStore collection '$props.applicationCollectionName'"
-	metadataStore.getCollection(props.applicationCollectionName).addLogicalFiles(logicalFiles)
+		println "** Storing ${logicalFiles.size()} logical files in MetadataStore collection '${sourcesCollection.getName()}'"
+	sourcesCollection.addLogicalFiles(logicalFiles)
 	
 }
 
@@ -636,72 +636,25 @@ def updateCollection(changedFiles, deletedFiles, renamedFiles) {
  * these to determine that this file gets rebuilt if a LINK dependency changes.
  */
 def saveStaticLinkDependencies(String buildFile, String loadPDS, LogicalFile logicalFile) {
-	MetadataStore metadataStore = MetadataStoreFactory.getMetadataStore()
-	if (metadataStore && !props.error && !props.preview) {
+	if (MetadataStoreFactory.metadataStoreExists() && !props.error && !props.preview) {
+
 		LinkEditScanner scanner = new LinkEditScanner()
 		if (props.verbose) println "*** Scanning load module for $buildFile"
 		LogicalFile scannerLogicalFile = scanner.scan(buildUtils.relativizePath(buildFile), loadPDS)
 		if (props.verbose) println "*** Logical file = \n$scannerLogicalFile"
 
-		// overwrite original logicalDependencies with load module dependencies
-		logicalFile.setLogicalDependencies(scannerLogicalFile.getLogicalDependencies())
+		// set language and submodule attributes based on provided logical file
+		scannerLogicalFile.setLanguage(logicalFile.getLanguage())
+		scannerLogicalFile.setCICS(logicalFile.isCICS())
+		scannerLogicalFile.setSQL(logicalFile.isSQL())
+		scannerLogicalFile.setDLI(logicalFile.isDLI())
+		scannerLogicalFile.setMQ(logicalFile.isMQ())
 
 		// Store logical file and indirect dependencies to the outputs collection
-		metadataStore.getCollection("${props.applicationOutputsCollectionName}").addLogicalFile( logicalFile );
+		MetadataStoreFactory.getMetadataStore().getBuildGroup(props.applicationBuildGroup)
+												.getCollection("outputs")
+												.addLogicalFile( scannerLogicalFile );
 	}
-}
-
-/*
- * verifyCollections - verifies that the application collections exists. If not it will
- * create or clone the collections.
- * Uses build properties
- */
-def verifyCollections() {
-	MetadataStore metadataStore = MetadataStoreFactory.getMetadataStore()
-	if (!metadataStore) {
-		if (props.verbose) println "** Unable to verify collections. No metadata store."
-		return
-	}
-
-	String mainCollectionName = "${props.application}-${props.mainBuildBranch}"
-	String mainOutputsCollectionName = "${props.application}-${props.mainBuildBranch}-outputs"
-
-	// check source collection
-	if (!metadataStore.collectionExists(props.applicationCollectionName)) {
-		if (props.topicBranchBuild) {
-			if (metadataStore.collectionExists(mainCollectionName)) {
-				metadataStore.copyCollection(mainCollectionName, props.applicationCollectionName)
-				if (props.verbose) println "** Cloned collection ${props.applicationCollectionName} from $mainCollectionName"
-			}
-			else {
-				metadataStore.createCollection(props.applicationCollectionName)
-				if (props.verbose) println "** Created collection ${props.applicationCollectionName}"
-			}
-		}
-		else {
-			metadataStore.createCollection(props.applicationCollectionName)
-			if (props.verbose) println "** Created collection ${props.applicationCollectionName}"
-		}
-	}
-
-	// check outputs collection
-	if (!metadataStore.collectionExists(props.applicationOutputsCollectionName)) {
-		if (props.topicBranchBuild) {
-			if (metadataStore.collectionExists(mainOutputsCollectionName)) {
-				metadataStore.copyCollection("${mainOutputsCollectionName}", props.applicationOutputsCollectionName)
-				if (props.verbose) println "** Cloned collection ${props.applicationOutputsCollectionName} from $mainOutputsCollectionName"
-			}
-			else {
-				metadataStore.createCollection(props.applicationOutputsCollectionName)
-				if (props.verbose) println "** Created collection ${props.applicationOutputsCollectionName}"
-			}
-		}
-		else {
-			metadataStore.createCollection(props.applicationOutputsCollectionName)
-			if (props.verbose) println "** Created collection ${props.applicationOutputsCollectionName}"
-		}
-	}
-
 }
 
 /*
