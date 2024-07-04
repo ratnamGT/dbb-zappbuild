@@ -3,7 +3,7 @@
 Each test script is expected to be able to run on its own without any dependency. It is expected, that a test script resets the environment during finalizing phase of the test.
 
 ## fullBuild.groovy
-This script is called by test.groovy to run a full build by creating a new “automation” branch from the feature branch specified in the command line argument. It verifies the below requirements
+This script is called by test.groovy to run a full build by creating a new automation branch from the feature branch specified in the command line argument. It verifies the below requirements
 - Full build ran clean
 - Number of expected build files equal the number of files build during the full build in the console.
 - Build files expected is the same as build files during the full build in the console.
@@ -15,7 +15,7 @@ This script is called by test.groovy to run a full build and multiple user build
 - userBuild TC2 to validate a failing override and check on an expected warning message
 
 ## fullBuild_debug.groovy
-This script is called by test.groovy to run a full build by creating a new “automation” branch from the feature branch specified in the command line argument. It verifies the below requirements
+This script is called by test.groovy to run a full build by creating a new automation branch from the feature branch specified in the command line argument. It verifies the below requirements
 - Full build with the `--debug` cli option ran clean
 - Number of expected build files equal the number of files build during the full build in the console.
 - Checks if output files are documented in the BuildReport.json. Specifically use it to check if the SIDEFILE for Assembler is present. Cobol and PLI don't produce an additional output file.
